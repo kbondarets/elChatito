@@ -1,0 +1,450 @@
+:root {
+  --bg: #0f1117;
+  --panel: #171a22;
+  --panel-2: #1e222c;
+  --border: #2a2f3a;
+  --text: #e8eaed;
+  --muted: #8b93a3;
+  --accent: #4f7cff;
+  --user: #24324f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.layout {
+  display: flex;
+  height: 100vh;
+}
+
+/* ----- Сайдбар ----- */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  gap: 12px;
+}
+
+.new-chat {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.new-chat:hover {
+  filter: brightness(1.1);
+}
+
+.chat-list {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chat-item:hover {
+  background: var(--panel-2);
+}
+
+.chat-item.active {
+  background: var(--panel-2);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Кнопки переименования и удаления — появляются при наведении. */
+.chat-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.chat-item:hover .chat-actions,
+.chat-item.active .chat-actions {
+  display: flex;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+
+.icon-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Поле ввода нового имени прямо в строке чата. */
+.chat-rename {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.chat-rename:focus {
+  outline: none;
+}
+
+.empty-hint,
+.placeholder {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+/* ----- Основная область ----- */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.topbar-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.topbar select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  min-width: 260px;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bubble {
+  max-width: 780px;
+  border-radius: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.bubble.user {
+  align-self: flex-end;
+  background: var(--user);
+  border-color: #2f4470;
+}
+
+.bubble.assistant {
+  align-self: flex-start;
+}
+
+.bubble .role {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.bubble .text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  font-size: 15px;
+}
+
+/* ----- Плавный вывод ответа ----- */
+.bubble.streaming .text {
+  min-height: 1.5em;
+}
+
+.thinking {
+  color: var(--muted);
+}
+
+/* Мигающий курсор в конце «печатающегося» текста. */
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: cursor-blink 1s steps(1, end) infinite;
+}
+
+@keyframes cursor-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.error {
+  margin: 0 20px 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #3a1d1d;
+  border: 1px solid #7a2c2c;
+  color: #ffb4b4;
+  font-size: 13px;
+}
+
+/* ----- Поле ввода ----- */
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 14px 20px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.composer-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Кнопка-скрепка для прикрепления файлов. */
+.attach-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.attach-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.composer textarea {
+  resize: none;
+  min-height: 44px;
+  max-height: 200px;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 15px;
+  font-family: inherit;
+}
+
+.composer textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.composer button {
+  padding: 0 20px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ----- Вложения ----- */
+
+/* Плашки вложений в пузыре сообщения. */
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.att-image img {
+  max-width: 260px;
+  max-height: 260px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  display: block;
+}
+
+.att-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.att-file:hover {
+  border-color: var(--accent);
+}
+
+.att-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.att-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-size {
+  color: var(--muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* Список файлов, готовых к отправке (над полем ввода). */
+.pending {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pending-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.pending-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-thumb {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.chip-remove {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 5px;
+}
+
+.chip-remove:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Подсказка (например, про модель без зрения). */
+.hint {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: #3a331d;
+  border: 1px solid #7a6a2c;
+  color: #ffe1a8;
+  font-size: 12px;
+}

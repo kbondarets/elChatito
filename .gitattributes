@@ -1,0 +1,10 @@
+# В репозитории текст храним с LF, а на Windows рабочие файлы — как принято в ОС.
+* text=auto
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
