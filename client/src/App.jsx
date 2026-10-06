@@ -1,14 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, apiStream, uploadFile, generateImage, editImage } from './api.js';
-
-// Человеческие подписи для типов моделей (тип приходит из /v1/account/pricing).
-const TYPE_LABEL = { chat: 'чат', image: 'картинки', video: 'видео', embedding: 'эмбеддинги' };
-// Модели с capability "vision" видят картинки — помечаем глазом,
-// а с "image_edit" — умеют править готовую картинку (помечаем кистью).
-const modelLabel = (m) => {
-  const marks = `${m.capabilities?.includes('vision') ? '👁 ' : ''}${m.capabilities?.includes('image_edit') ? '🖌 ' : ''}`;
-  return `${marks}${m.name} · ${TYPE_LABEL[m.type] || m.type}`;
-};
+import { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_LABEL, TYPE_ORDER } from './modelInfo.js';
 
 // Размеры кадра для правки картинки (для генерации размер выбирает модель сама).
 const EDIT_SIZES = [
@@ -106,6 +98,146 @@ function AttachmentView({ a, onEdit }) {
   );
 }
 
+// Стоимость одной модели в таблице: у чата — три ставки за 1M токенов,
+// у картинок и видео — цена за кадр/секунду. Если apimira цену не отдала,
+// честно пишем «нет данных», а не показываем ноль.
+function PriceCell({ price }) {
+  if (!price) return <span className="mt-nodata">нет данных</span>;
+
+  if (price.kind === 'tokens') {
+    return (
+      <div className="mt-price-lines">
+        {price.input != null && (
+          <span>
+            <b>вход</b> {formatUsd(price.input)}
+          </span>
+        )}
+        {price.cachedInput != null && (
+          <span>
+            <b>кэш</b> {formatUsd(price.cachedInput)}
+          </span>
+        )}
+        {price.output != null && (
+          <span>
+            <b>выход</b> {formatUsd(price.output)}
+          </span>
+        )}
+        <span className="mt-unit">за 1M токенов</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-price-lines">
+      <span className="mt-price-main">{formatUsd(price.amount)}</span>
+      <span className="mt-unit">{price.kind === 'second' ? 'за секунду видео' : 'за кадр'}</span>
+    </div>
+  );
+}
+
+// Правая панель «Модели и цены»: открывается кнопкой «i» в шапке.
+// Таблица разбита по типам моделей; строка текущей модели подсвечена, а клик
+// по строке сразу выбирает эту модель для открытого чата.
+function ModelInfoPanel({ models, currentModelId, onPick, onClose }) {
+  const [query, setQuery] = useState('');
+
+  // Закрытие по Esc — привычно для панелей, открывающихся поверх экрана.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const needle = query.trim().toLowerCase();
+  const visible = needle
+    ? models.filter((m) =>
+        `${m.name} ${m.id} ${purposeLabel(m)}`.toLowerCase().includes(needle),
+      )
+    : models;
+
+  // Разделы идут в привычном порядке (чат → картинки → видео → эмбеддинги),
+  // а всё незнакомое (например, модель без данных о типе) — в конце.
+  const groups = [...TYPE_ORDER, 'other']
+    .map((type) => ({
+      type,
+      list:
+        type === 'other'
+          ? visible.filter((m) => !TYPE_ORDER.includes(m.type))
+          : visible.filter((m) => m.type === type),
+    }))
+    .filter((g) => g.list.length);
+
+  return (
+    <aside className="infopanel" aria-label="Модели и цены">
+      <header className="infopanel-head">
+        <span className="infopanel-title">Модели и цены</span>
+        <button type="button" className="icon-btn" title="Закрыть" onClick={onClose}>
+          ×
+        </button>
+      </header>
+
+      <p className="infopanel-note">
+        Цены apimira — в долларах за 1M токенов (у картинок и видео — за кадр или секунду).
+        Нажмите строку, чтобы выбрать модель для открытого чата.
+      </p>
+
+      <input
+        className="infopanel-search"
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Поиск: название, id или назначение"
+        aria-label="Поиск по моделям"
+      />
+
+      <div className="infopanel-body">
+        {!models.length && <p className="placeholder">Список моделей ещё не загружен.</p>}
+        {!!models.length && !groups.length && <p className="placeholder">Ничего не найдено.</p>}
+
+        {groups.map((g) => (
+          <table className="model-table" key={g.type}>
+            <caption>{TYPE_LABEL[g.type] || 'прочее'}</caption>
+            <thead>
+              <tr>
+                <th>Модель</th>
+                <th>Для чего</th>
+                <th>Стоимость</th>
+              </tr>
+            </thead>
+            <tbody>
+              {g.list.map((m) => (
+                <tr
+                  key={m.id}
+                  className={m.id === currentModelId ? 'current' : ''}
+                  onClick={() => onPick(m.id)}
+                  title={`Выбрать модель ${m.name}`}
+                >
+                  <td className="mt-name">
+                    <span className="mt-title">
+                      {m.name}
+                      {!!capMarks(m) && <span className="mt-marks">{capMarks(m)}</span>}
+                    </span>
+                    <span className="mt-id">{m.id}</span>
+                    {m.contextWindow != null && (
+                      <span className="mt-ctx">{formatTokens(m.contextWindow)} токенов контекста</span>
+                    )}
+                  </td>
+                  <td className="mt-purpose">{purposeLabel(m)}</td>
+                  <td className="mt-price">
+                    <PriceCell price={priceInfo(m)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 export default function App() {
   const [models, setModels] = useState([]);
   const [chats, setChats] = useState([]);
@@ -141,6 +273,8 @@ export default function App() {
   // Подсвечиваем область чата, когда файл тащат в окно.
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
+  // Панель «Модели и цены» (кнопка «i» в шапке) — открыта или нет.
+  const [showModels, setShowModels] = useState(false);
 
   // При старте: список моделей и список чатов, а затем сразу открываем чат —
   // верхний в списке (последний по времени) или новый, если чатов ещё нет.
@@ -465,8 +599,9 @@ export default function App() {
     }
   }
 
-  async function changeModel(event) {
-    const model = event.target.value;
+  // Выбор модели — и из выпадающего списка, и кликом по строке в панели «Модели и цены».
+  async function selectModel(model) {
+    if (!model || model === chat?.model) return;
     // Смена модели сбрасывает режим картинок (нарисовать/изменить) и вложения.
     setImageMode('generate');
     setPending([]);
@@ -618,13 +753,23 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <span className="topbar-label">Модель:</span>
-          <select value={chat?.model || ''} onChange={changeModel} disabled={!chat}>
+          <select value={chat?.model || ''} onChange={(e) => selectModel(e.target.value)} disabled={!chat}>
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {modelLabel(m)}
               </option>
             ))}
           </select>
+          {/* «i» — панель с описанием моделей и тарифами (правая колонка). */}
+          <button
+            type="button"
+            className={`info-btn ${showModels ? 'active' : ''}`}
+            title="Модели и цены — что умеет каждая модель и сколько стоит"
+            aria-expanded={showModels}
+            onClick={() => setShowModels((v) => !v)}
+          >
+            i
+          </button>
         </header>
 
         <section className="messages" ref={messagesRef}>
@@ -815,6 +960,16 @@ export default function App() {
           )}
         </form>
       </main>
+
+      {/* Правая колонка «Модели и цены». */}
+      {showModels && (
+        <ModelInfoPanel
+          models={models}
+          currentModelId={chat?.model}
+          onPick={(id) => selectModel(id)}
+          onClose={() => setShowModels(false)}
+        />
+      )}
     </div>
   );
 }
