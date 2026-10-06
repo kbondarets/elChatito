@@ -58,6 +58,18 @@ export async function fetchCatalog() {
       // capabilities из /account/pricing: например ["vision"] — модель видит картинки.
       capabilities: Array.isArray(p?.capabilities) ? p.capabilities : [],
       contextWindow: p?.context_window ?? null,
+      // Тарифы для панели «Модели и цены» (кнопка «i»). Цены — в USD, как их
+      // отдаёт apimira: unit говорит, за что именно («1m_tokens», «generation»
+      // — за кадр, «second» — за секунду видео). Если прайс не пришёл — null.
+      pricing: p
+        ? {
+            unit: p.unit || null,
+            input: p.input_usd_per_1m_tokens ?? null,
+            cachedInput: p.cached_input_usd_per_1m_tokens ?? null,
+            output: p.output_usd_per_1m_tokens ?? null,
+            generation: p.generation_usd ?? null,
+          }
+        : null,
     };
   });
 }
