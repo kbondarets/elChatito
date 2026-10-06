@@ -14,6 +14,24 @@ const TEXT_EXT = new Set([
 
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif']);
 
+// Тип картинки определяем по «магическим» байтам, а не по имени файла:
+// шлюз apimira смотрит именно на содержимое и принимает только PNG, JPEG и WebP.
+// Возвращаем mime или null, если это не одна из поддерживаемых картинок.
+export function detectImageMime(buffer) {
+  if (!buffer || buffer.length < 12) return null;
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
+    return 'image/png';
+  }
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  // WebP: "RIFF" .... "WEBP"
+  if (buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  return null;
+}
+
 // Слишком длинный текст в промпт не льём — обрежем (модель и так не съест больше контекста).
 const MAX_TEXT_CHARS = 200_000;
 
@@ -22,7 +40,7 @@ export function extOf(name) {
   return m ? m[1].toLowerCase() : '';
 }
 
-// Определяем, что за файл: image | pdf | docx | text | unsupported.
+// Определяем, что за файл: image | image_unsupported | pdf | docx | text | unsupported.
 export function classify(name, mime, buffer) {
   const ext = extOf(name);
   const m = String(mime || '').toLowerCase();
@@ -30,7 +48,12 @@ export function classify(name, mime, buffer) {
   // SVG — это XML-текст, а не растровая картинка: модели его не «увидят».
   if (ext === 'svg' || m === 'image/svg+xml') return 'text';
 
-  if (m.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image';
+  // Картинка, которую шлюз действительно примет (PNG/JPEG/WebP по байтам).
+  if (detectImageMime(buffer)) return 'image';
+  // Остальные картинки (GIF, BMP, AVIF, битый файл) сохранить не даём —
+  // apimira проверяет тип по содержимому и отвечает 400.
+  if (m.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image_unsupported';
+
   if (m === 'application/pdf' || ext === 'pdf') return 'pdf';
   if (ext === 'docx' || m.includes('wordprocessingml.document')) return 'docx';
 

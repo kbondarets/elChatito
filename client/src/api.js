@@ -41,6 +41,22 @@ export async function uploadFile(file) {
   return meta;
 }
 
+// Генерация картинки: промпт уходит на сервер, ответ — чат с новыми вложениями.
+export function generateImage({ chatId, model, prompt, n }) {
+  return api('/images/generations', {
+    method: 'POST',
+    body: JSON.stringify({ chatId, model, prompt, n }),
+  });
+}
+
+// Редактирование картинки по описанию (может занять несколько минут).
+export function editImage({ chatId, model, prompt, attachments, n, size }) {
+  return api('/images/edits', {
+    method: 'POST',
+    body: JSON.stringify({ chatId, model, prompt, attachments, n, size }),
+  });
+}
+
 // Потоковый запрос: читаем SSE-ответ сервера и отдаём кусочки текста в onDelta.
 // Возвращает финальный объект чата из события "done" (или null).
 export async function apiStream(path, body, { onDelta, signal } = {}) {

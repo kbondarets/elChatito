@@ -5,8 +5,9 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { getCatalog, refreshCatalog } from './catalog.js';
-import { chatComplete, chatCompleteStream } from './apimira.js';
+import { chatComplete, chatCompleteStream, generateImage, editImage } from './apimira.js';
 import { toUpstreamMessages } from './messages.js';
+import { detectImageMime } from './extract.js';
 import * as uploads from './uploads.js';
 import * as store from './store.js';
 
@@ -62,6 +63,137 @@ app.get('/api/uploads/:id', (req, res) => {
   res.setHeader('Content-Type', file.meta.mime || 'application/octet-stream');
   res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(file.meta.name)}`);
   res.send(file.buffer);
+});
+
+// ----- Картинки -----
+
+// Промпт у генерации и правки — до 15 000 символов (требование apimira).
+const MAX_PROMPT_CHARS = 15_000;
+// Сколько кадров просим за раз (у правки документация допускает 1…4).
+const MAX_IMAGE_COUNT = 4;
+
+// Достаём вложения-картинки по id: возвращаем { buffer, mime, name } для отправки.
+function loadImageAttachments(ids) {
+  const list = Array.isArray(ids) ? ids : [];
+  return list.map((id) => {
+    const file = uploads.readUpload(id);
+    if (!file) throw new Error('Картинка не найдена — загрузите её ещё раз.');
+    if (file.meta.kind !== 'image') throw new Error(`«${file.meta.name}» — не картинка.`);
+    return { buffer: file.buffer, mime: file.meta.mime, name: file.meta.name };
+  });
+}
+
+// Кладём пришедшие от модели кадры (base64) в хранилище и получаем их метаданные.
+function saveGeneratedImages(b64List, prefix) {
+  return b64List.map((b64, i) => {
+    const buffer = Buffer.from(b64, 'base64');
+    // Формат кадра выбирает модель (PNG или JPEG) — определяем по байтам.
+    const mime = detectImageMime(buffer) || 'image/png';
+    const ext = mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : 'png';
+    return uploads.saveBuffer({
+      name: `${prefix}-${i + 1}.${ext}`,
+      mime,
+      buffer,
+      // Кадр уже оплачен — храним его даже если он больше 5 МБ (лимита на вход).
+      maxBytes: uploads.MAX_UPLOAD_BYTES,
+    });
+  });
+}
+
+// Генерация картинок: POST /v1/images/generations через наш сервер.
+app.post('/api/images/generations', async (req, res) => {
+  const chat = store.getChat(req.body?.chatId);
+  if (!chat) return res.status(404).json({ error: 'chat_not_found', message: 'Чат не найден.' });
+
+  const model = String(req.body?.model || '').trim();
+  const prompt = String(req.body?.prompt ?? '').trim();
+  const n = Math.min(Math.max(Number(req.body?.n) || 1, 1), MAX_IMAGE_COUNT);
+  if (!model) return res.status(400).json({ error: 'no_model', message: 'Не выбрана модель.' });
+  if (!prompt) return res.status(400).json({ error: 'empty_prompt', message: 'Пустой промпт.' });
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return res.status(400).json({
+      error: 'prompt_too_long',
+      message: `Промпт длиннее ${MAX_PROMPT_CHARS} символов.`,
+    });
+  }
+
+  // Сразу показываем в переписке, что именно попросили нарисовать.
+  store.addMessage(chat.id, { role: 'user', content: prompt });
+
+  try {
+    const { images, requestId } = await generateImage({ model, prompt, n });
+    const attachments = saveGeneratedImages(images, 'image');
+    store.addMessage(chat.id, {
+      role: 'assistant',
+      content: n > 1 ? `Готово: ${attachments.length} картинки.` : 'Готово.',
+      attachments,
+      requestId: requestId || undefined,
+    });
+    res.json({ chat: store.getChat(chat.id), requestId: requestId || null });
+  } catch (err) {
+    res.status(502).json({
+      error: 'upstream_error',
+      message: err.message,
+      chat: store.getChat(chat.id),
+    });
+  }
+});
+
+// Редактирование картинки: POST /v1/images/edits. Операция долгая — модель
+// может думать несколько минут, поэтому таймаут клиента должен быть не меньше 600 с.
+app.post('/api/images/edits', async (req, res) => {
+  const chat = store.getChat(req.body?.chatId);
+  if (!chat) return res.status(404).json({ error: 'chat_not_found', message: 'Чат не найден.' });
+
+  const model = String(req.body?.model || '').trim();
+  const prompt = String(req.body?.prompt ?? '').trim();
+  const n = Math.min(Math.max(Number(req.body?.n) || 1, 1), MAX_IMAGE_COUNT);
+  const size = String(req.body?.size || 'auto');
+  const ids = Array.isArray(req.body?.attachments) ? req.body.attachments : [];
+
+  if (!model) return res.status(400).json({ error: 'no_model', message: 'Не выбрана модель.' });
+  if (!prompt) return res.status(400).json({ error: 'empty_prompt', message: 'Опишите, что изменить.' });
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return res.status(400).json({
+      error: 'prompt_too_long',
+      message: `Описание длиннее ${MAX_PROMPT_CHARS} символов.`,
+    });
+  }
+  if (!ids.length || ids.length > MAX_IMAGE_COUNT) {
+    return res.status(400).json({
+      error: 'bad_images',
+      message: `Нужно от 1 до ${MAX_IMAGE_COUNT} картинок.`,
+    });
+  }
+
+  let images;
+  try {
+    images = loadImageAttachments(ids);
+  } catch (err) {
+    return res.status(400).json({ error: 'bad_images', message: err.message });
+  }
+
+  // В историю кладём исходные картинки вместе с описанием правки.
+  const sourceMeta = ids.map((id) => uploads.readUpload(id).meta);
+  store.addMessage(chat.id, { role: 'user', content: prompt, attachments: sourceMeta });
+
+  try {
+    const { images: result, requestId } = await editImage({ model, prompt, images, n, size });
+    const attachments = saveGeneratedImages(result, 'edit');
+    store.addMessage(chat.id, {
+      role: 'assistant',
+      content: n > 1 ? `Готово: ${attachments.length} варианта.` : 'Готово.',
+      attachments,
+      requestId: requestId || undefined,
+    });
+    res.json({ chat: store.getChat(chat.id), requestId: requestId || null });
+  } catch (err) {
+    res.status(502).json({
+      error: 'upstream_error',
+      message: err.message,
+      chat: store.getChat(chat.id),
+    });
+  }
 });
 
 // Создать новый чат.
