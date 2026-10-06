@@ -1,4 +1,7 @@
 import 'dotenv/config';
+// Запасной DNS через DoH: подключаем до первого сетевого запроса, чтобы
+// apimira.com находился, даже если провайдер «глушит» обычный DNS (см. server/doh.js).
+import './doh.js';
 
 // Базовый адрес apimira. Убираем хвостовые слэши, чтобы не получилось /v1/v1.
 const BASE_URL = (process.env.apimira_base_url || 'https://apimira.com/v1').replace(/\/+$/, '');

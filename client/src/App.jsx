@@ -16,6 +16,58 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
+// Морда кота — символ elChatito. Силуэт белый (цвет = цвет текста), а глаза,
+// нос и рот «вырезаны» цветом панели — поэтому морда читается на тёмном фоне.
+function ChatitoLogo({ size = 26 }) {
+  return (
+    <svg
+      className="logo-cat"
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      role="img"
+      aria-label="el chatito"
+    >
+      {/* уши */}
+      <path d="M13 32 L11 7 L32 19 Z" fill="currentColor" />
+      <path d="M51 32 L53 7 L32 19 Z" fill="currentColor" />
+      {/* голова */}
+      <circle cx="32" cy="38" r="21" fill="currentColor" />
+      {/* глаза */}
+      <circle cx="24" cy="36" r="3.4" fill="var(--panel)" />
+      <circle cx="40" cy="36" r="3.4" fill="var(--panel)" />
+      {/* нос и рот */}
+      <path d="M28.5 43 H35.5 L32 47.5 Z" fill="var(--panel)" />
+      <path
+        d="M32 47.5 V50 M32 50 q-4.5 4.5 -9 1 M32 50 q4.5 4.5 9 1"
+        stroke="var(--panel)"
+        strokeWidth="2"
+        strokeLinecap="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+// Обычная контурная скрепка — в отличие от эмодзи 📎 её хорошо видно.
+function PaperclipIcon({ size = 24 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
 // Вложение в пузыре сообщения: картинку показываем превью, остальное — плашкой.
 function AttachmentView({ a }) {
   const url = `/api/uploads/${a.id}`;
@@ -61,15 +113,31 @@ export default function App() {
   // Файлы, готовые к отправке (уже загружены на сервер — храним метаданные).
   const [pending, setPending] = useState([]);
   const [uploading, setUploading] = useState(false);
+  // Подсвечиваем область чата, когда файл тащат в окно.
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
 
-  // При старте: список моделей и список чатов.
+  // При старте: список моделей и список чатов, а затем сразу открываем чат —
+  // верхний в списке (последний по времени) или новый, если чатов ещё нет.
+  // Так после запуска можно печатать сразу, не нажимая «+ Новый чат».
+  // bootstrappedRef защищает от повторного запуска: в StrictMode React в режиме
+  // разработки прогоняет эффекты дважды, и без защиты создалось бы два чата.
+  const bootstrappedRef = useRef(false);
   useEffect(() => {
+    if (bootstrappedRef.current) return;
+    bootstrappedRef.current = true;
     (async () => {
       try {
         const [m, c] = await Promise.all([api('/models'), api('/chats')]);
-        setModels(m.models || []);
-        setChats(c.chats || []);
+        const modelList = m.models || [];
+        const chatList = c.chats || [];
+        setModels(modelList);
+        setChats(chatList);
+        if (chatList.length) {
+          setCurrentId(chatList[0].id);
+        } else {
+          await createChat(modelList);
+        }
       } catch (e) {
         setError(e.message);
       }
@@ -97,6 +165,17 @@ export default function App() {
     setPending([]);
   }, [currentId]);
 
+  // Гасим «браузерное» поведение: без этого файл, брошенный мимо зоны, открылся бы в окне.
+  useEffect(() => {
+    const block = (e) => e.preventDefault();
+    window.addEventListener('dragover', block);
+    window.addEventListener('drop', block);
+    return () => {
+      window.removeEventListener('dragover', block);
+      window.removeEventListener('drop', block);
+    };
+  }, []);
+
   // Прокрутка вниз при новом сообщении или во время ожидания ответа.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -115,11 +194,30 @@ export default function App() {
     setChats(chats || []);
   }
 
-  // Загружаем выбранные файлы по одному (чтобы показать ошибку по конкретному файлу).
-  async function pickFiles(event) {
-    const files = Array.from(event.target.files || []);
-    event.target.value = ''; // иначе нельзя выбрать тот же файл повторно
+  // Создать чат и сразу его открыть. Список моделей принимаем аргументом:
+  // при старте приложения состояние models ещё не успевает обновиться.
+  async function createChat(modelList, preferredModel) {
+    const model =
+      preferredModel || modelList?.find((m) => m.type === 'chat')?.id || modelList?.[0]?.id;
+    const { chat: created } = await api('/chats', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    });
+    await refreshChats();
+    setCurrentId(created.id);
+    return created;
+  }
+
+  // Загружаем файлы по одному (чтобы показать ошибку по конкретному файлу).
+  // Один путь и для кнопки-скрепки, и для перетаскивания, и для вставки из буфера.
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
     if (!files.length) return;
+    if (!currentId) {
+      setError('Сначала создайте чат.');
+      return;
+    }
+    if (sending || uploading) return;
     setError('');
     setUploading(true);
     try {
@@ -136,6 +234,43 @@ export default function App() {
     }
   }
 
+  function pickFiles(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = ''; // иначе нельзя выбрать тот же файл повторно
+    uploadFiles(files);
+  }
+
+  // Ctrl+V: если в буфере картинка/файл — прикрепляем его, иначе вставляется текст.
+  function pasteFiles(event) {
+    const files = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (files.length) {
+      event.preventDefault();
+      uploadFiles(files);
+    }
+  }
+
+  // Перетаскивание: подсвечиваем зону, а на drop забираем файлы.
+  function dragOver(event) {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault(); // без этого браузер откроет файл вместо загрузки
+    setDragging(true);
+  }
+
+  function dragLeave(event) {
+    // Уходим только когда курсор покинул саму зону, а не её дочерние элементы.
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setDragging(false);
+  }
+
+  function dropFiles(event) {
+    event.preventDefault();
+    setDragging(false);
+    uploadFiles(event.dataTransfer?.files);
+  }
+
   function removePending(id) {
     setPending((prev) => prev.filter((a) => a.id !== id));
   }
@@ -143,15 +278,9 @@ export default function App() {
   async function newChat() {
     if (sending) return; // не переключаемся, пока модель печатает
     setError('');
-    // Берём модель текущего чата, а если чата нет — первую чат-модель.
-    const model = chat?.model || models.find((m) => m.type === 'chat')?.id || models[0]?.id;
     try {
-      const { chat: created } = await api('/chats', {
-        method: 'POST',
-        body: JSON.stringify({ model }),
-      });
-      await refreshChats();
-      setCurrentId(created.id);
+      // Модель берём из текущего чата, а если чата нет — первую чат-модель.
+      await createChat(models, chat?.model);
     } catch (e) {
       setError(e.message);
     }
@@ -265,10 +394,13 @@ export default function App() {
     try {
       await api(`/chats/${id}`, { method: 'DELETE' });
       await refreshChats();
-      // Если удалили открытый чат — вернёмся к пустому экрану.
+      // Удалили открытый чат — открываем следующий, а если чатов не осталось,
+      // создаём новый: экран без открытого чата выглядит как поломка.
       if (currentId === id) {
-        setCurrentId(null);
-        setChat(null);
+        const rest = chats.filter((c) => c.id !== id);
+        setChat(null); // не показываем сообщения удалённого чата
+        if (rest.length) setCurrentId(rest[0].id);
+        else await createChat(models);
       }
     } catch (e) {
       setError(e.message);
@@ -285,6 +417,11 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar">
+        <div className="brand" title="el chatito">
+          <ChatitoLogo size={30} />
+          <span className="brand-name">el chatito</span>
+        </div>
+
         <button className="new-chat" onClick={newChat}>
           + Новый чат
         </button>
@@ -368,7 +505,7 @@ export default function App() {
         </header>
 
         <section className="messages" ref={messagesRef}>
-          {!chat && <p className="placeholder">Создайте новый чат, чтобы начать общение.</p>}
+          {!chat && <p className="placeholder">Открываем чат…</p>}
           {chat?.messages?.length === 0 && <p className="placeholder">Напишите первое сообщение.</p>}
           {chat?.messages?.map((m, i) => (
             <div key={i} className={`bubble ${m.role}`}>
@@ -403,17 +540,14 @@ export default function App() {
 
         {error && <div className="error">{error}</div>}
 
-        <form className="composer" onSubmit={send}>
+        <form
+          className={`composer ${dragging ? 'dragging' : ''}`}
+          onSubmit={send}
+          onDragOver={dragOver}
+          onDragLeave={dragLeave}
+          onDrop={dropFiles}
+        >
           <input ref={fileInputRef} type="file" multiple hidden onChange={pickFiles} />
-          <button
-            type="button"
-            className="attach-btn"
-            title="Прикрепить файл или фото"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!chat || sending || uploading}
-          >
-            {uploading ? '…' : '📎'}
-          </button>
 
           <div className="composer-body">
             {!!pending.length && (
@@ -446,24 +580,44 @@ export default function App() {
               </div>
             )}
 
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) send(e);
-              }}
-              placeholder={chat ? 'Введите сообщение и нажмите Enter…' : 'Сначала создайте чат'}
-              disabled={!chat || sending}
-              rows={1}
-            />
+            <div className="composer-row">
+              <button
+                type="button"
+                className="attach-btn"
+                title="Прикрепить файл или фото"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!chat || sending || uploading}
+              >
+                {uploading ? '…' : <PaperclipIcon size={24} />}
+              </button>
+
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={pasteFiles}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) send(e);
+                }}
+                placeholder="Введите сообщение и нажмите Enter…"
+                disabled={!chat || sending}
+                rows={1}
+              />
+
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={!chat || sending || uploading || (!input.trim() && !pending.length)}
+              >
+                Отправить
+              </button>
+            </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={!chat || sending || uploading || (!input.trim() && !pending.length)}
-          >
-            Отправить
-          </button>
+          {dragging && (
+            <div className="drop-overlay">
+              <span>Отпустите файлы, чтобы прикрепить</span>
+            </div>
+          )}
         </form>
       </main>
     </div>
