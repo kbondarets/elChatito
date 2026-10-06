@@ -1,11 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { api, apiStream, uploadFile } from './api.js';
+import { api, apiStream, uploadFile, generateImage, editImage } from './api.js';
 
 // Человеческие подписи для типов моделей (тип приходит из /v1/account/pricing).
 const TYPE_LABEL = { chat: 'чат', image: 'картинки', video: 'видео', embedding: 'эмбеддинги' };
-// Модели с capability "vision" видят картинки — помечаем глазом.
-const modelLabel = (m) =>
-  `${m.capabilities?.includes('vision') ? '👁 ' : ''}${m.name} · ${TYPE_LABEL[m.type] || m.type}`;
+// Модели с capability "vision" видят картинки — помечаем глазом,
+// а с "image_edit" — умеют править готовую картинку (помечаем кистью).
+const modelLabel = (m) => {
+  const marks = `${m.capabilities?.includes('vision') ? '👁 ' : ''}${m.capabilities?.includes('image_edit') ? '🖌 ' : ''}`;
+  return `${marks}${m.name} · ${TYPE_LABEL[m.type] || m.type}`;
+};
+
+// Размеры кадра для правки картинки (для генерации размер выбирает модель сама).
+const EDIT_SIZES = [
+  { value: 'auto', label: 'как на фото' },
+  { value: '1024x1024', label: 'квадрат' },
+  { value: '1024x1536', label: 'вертикальный' },
+  { value: '1536x1024', label: 'горизонтальный' },
+];
 
 const FILE_ICON = { pdf: '📕', docx: '📘', text: '📄', image: '🖼️' };
 
@@ -69,13 +80,21 @@ function PaperclipIcon({ size = 24 }) {
 }
 
 // Вложение в пузыре сообщения: картинку показываем превью, остальное — плашкой.
-function AttachmentView({ a }) {
+// onEdit (если передан) добавляет кнопку «изменить» под картинкой.
+function AttachmentView({ a, onEdit }) {
   const url = `/api/uploads/${a.id}`;
   if (a.kind === 'image') {
     return (
-      <a className="att-image" href={url} target="_blank" rel="noreferrer" title={a.name}>
-        <img src={url} alt={a.name} />
-      </a>
+      <div className="att-image-wrap">
+        <a className="att-image" href={url} target="_blank" rel="noreferrer" title={a.name}>
+          <img src={url} alt={a.name} />
+        </a>
+        {onEdit && (
+          <button type="button" className="att-edit" title="Изменить эту картинку" onClick={() => onEdit(a)}>
+            🖌 Изменить
+          </button>
+        )}
+      </div>
     );
   }
   return (
@@ -113,6 +132,12 @@ export default function App() {
   // Файлы, готовые к отправке (уже загружены на сервер — храним метаданные).
   const [pending, setPending] = useState([]);
   const [uploading, setUploading] = useState(false);
+  // Параметры генерации/правки картинок: сколько кадров и какой размер кадра.
+  const [genCount, setGenCount] = useState(1);
+  const [editSize, setEditSize] = useState('auto');
+  // Режим композера для моделей типа «картинки»: 'generate' или 'edit'.
+  const [imageMode, setImageMode] = useState('generate');
+  const textareaRef = useRef(null);
   // Подсвечиваем область чата, когда файл тащат в окно.
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
@@ -275,6 +300,78 @@ export default function App() {
     setPending((prev) => prev.filter((a) => a.id !== id));
   }
 
+  // Общая обёртка для генерации и правки: блокируем ввод, гоняем запрос,
+  // подменяем чат ответом сервера и обновляем список чатов.
+  async function runImageJob(work) {
+    if (!currentId || sending || uploading) return;
+    setError('');
+    setSending(true);
+    try {
+      const { chat: updated } = await work();
+      if (updated) setChat(updated);
+      await refreshChats();
+    } catch (e) {
+      setError(e.message);
+      // Покажем актуальную переписку (сообщение пользователя уже сохранено).
+      try {
+        const { chat: fresh } = await api(`/chats/${currentId}`);
+        setChat(fresh);
+      } catch {
+        // ignore
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Сгенерировать картинку по промпту (модель типа «картинки»).
+  function generate(event) {
+    event?.preventDefault();
+    const prompt = input.trim();
+    if (!prompt) return;
+    setInput('');
+    runImageJob(() => generateImage({ chatId: currentId, model: chat?.model, prompt, n: genCount }));
+  }
+
+  // Правка: берём выбранные картинки (pending) и описание — что с ними сделать.
+  function submitEdit(event) {
+    event?.preventDefault();
+    const prompt = input.trim();
+    const images = pending.filter((a) => a.kind === 'image');
+    if (!prompt || !images.length) return;
+    setInput('');
+    setPending([]);
+    runImageJob(() =>
+      editImage({
+        chatId: currentId,
+        model: chat?.model,
+        prompt,
+        attachments: images.map((a) => a.id),
+        n: genCount,
+        size: editSize,
+      }),
+    );
+  }
+
+  // Кнопка «Изменить» под картинкой: подставляем её в поле ввода и переключаем режим.
+  function startEdit(a) {
+    setError('');
+    setInput('');
+    setPending([a]);
+    setImageMode('edit');
+    // Фокус в поле ввода, чтобы сразу писать, что изменить.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  // Переключение режима работы (только для моделей типа «картинки»).
+  function switchImageMode(mode) {
+    if (mode === imageMode) return;
+    setImageMode(mode);
+    setInput('');
+    setPending([]);
+    setError('');
+  }
+
   async function newChat() {
     if (sending) return; // не переключаемся, пока модель печатает
     setError('');
@@ -311,6 +408,14 @@ export default function App() {
 
   async function send(event) {
     event?.preventDefault();
+    // Модели типа «картинки» работают не как чат: это генерация или правка картинки.
+    const activeModel = models.find((m) => m.id === chat?.model);
+    if (activeModel?.type === 'image') {
+      if (imageMode === 'edit') submitEdit(event);
+      else generate(event);
+      return;
+    }
+
     const content = input.trim();
     const attachments = pending.map((a) => a.id);
     if ((!content && !attachments.length) || !currentId || sending || uploading) return;
@@ -362,6 +467,11 @@ export default function App() {
 
   async function changeModel(event) {
     const model = event.target.value;
+    // Смена модели сбрасывает режим картинок (нарисовать/изменить) и вложения.
+    setImageMode('generate');
+    setPending([]);
+    setInput('');
+    setError('');
     setChat((prev) => (prev ? { ...prev, model } : prev));
     try {
       await api(`/chats/${currentId}`, { method: 'PATCH', body: JSON.stringify({ model }) });
@@ -411,8 +521,21 @@ export default function App() {
   const currentModel = models.find((m) => m.id === chat?.model);
   const visionWarn =
     pending.some((a) => a.kind === 'image') &&
+    currentModel?.type !== 'image' &&
     !!currentModel?.capabilities &&
     !currentModel.capabilities.includes('vision');
+
+  // Модель типа «картинки»: композер превращается в генератор/редактор.
+  const isImageModel = currentModel?.type === 'image';
+  const canEdit = !!currentModel?.capabilities?.includes('image_edit');
+  const editMode = isImageModel && imageMode === 'edit';
+  const pendingImages = pending.filter((a) => a.kind === 'image');
+  // Правка требует хотя бы одну картинку; генерация — только промпт.
+  const canSubmit = editMode
+    ? !!input.trim() && pendingImages.length > 0
+    : isImageModel
+      ? !!input.trim()
+      : !!input.trim() || pending.length > 0;
 
   return (
     <div className="layout">
@@ -513,7 +636,7 @@ export default function App() {
               {!!m.attachments?.length && (
                 <div className="attachments">
                   {m.attachments.map((a) => (
-                    <AttachmentView key={a.id} a={a} />
+                    <AttachmentView key={a.id} a={a} onEdit={canEdit ? startEdit : undefined} />
                   ))}
                 </div>
               )}
@@ -550,6 +673,65 @@ export default function App() {
           <input ref={fileInputRef} type="file" multiple hidden onChange={pickFiles} />
 
           <div className="composer-body">
+            {isImageModel && (
+              <div className="mode-row">
+                <div className="mode-tabs">
+                  <button
+                    type="button"
+                    className={`mode-tab ${imageMode === 'generate' ? 'active' : ''}`}
+                    onClick={() => switchImageMode('generate')}
+                  >
+                    Нарисовать
+                  </button>
+                  <button
+                    type="button"
+                    className={`mode-tab ${imageMode === 'edit' ? 'active' : ''}`}
+                    onClick={() => switchImageMode('edit')}
+                    disabled={!canEdit}
+                    title={canEdit ? 'Изменить готовую картинку' : 'Эта модель не умеет править картинки'}
+                  >
+                    Изменить
+                  </button>
+                </div>
+
+                {editMode ? (
+                  <>
+                    <label className="param">
+                      Размер
+                      <select value={editSize} onChange={(e) => setEditSize(e.target.value)}>
+                        {EDIT_SIZES.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="param">
+                      Кадров
+                      <select value={genCount} onChange={(e) => setGenCount(Number(e.target.value))}>
+                        {[1, 2, 3, 4].map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <label className="param">
+                    Кадров
+                    <select value={genCount} onChange={(e) => setGenCount(Number(e.target.value))}>
+                      {[1, 2, 3, 4].map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
+
             {!!pending.length && (
               <div className="pending">
                 {pending.map((a) => (
@@ -580,6 +762,12 @@ export default function App() {
               </div>
             )}
 
+            {editMode && !pendingImages.length && (
+              <div className="hint">
+                Прикрепите картинку скрепкой, перетаскиванием или Ctrl+V — и опишите, что изменить.
+              </div>
+            )}
+
             <div className="composer-row">
               <button
                 type="button"
@@ -592,13 +780,20 @@ export default function App() {
               </button>
 
               <textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onPaste={pasteFiles}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) send(e);
                 }}
-                placeholder="Введите сообщение и нажмите Enter…"
+                placeholder={
+                  editMode
+                    ? 'Опишите, что изменить на картинке…'
+                    : isImageModel
+                      ? 'Опишите, что нарисовать…'
+                      : 'Введите сообщение и нажмите Enter…'
+                }
                 disabled={!chat || sending}
                 rows={1}
               />
@@ -606,9 +801,9 @@ export default function App() {
               <button
                 type="submit"
                 className="send-btn"
-                disabled={!chat || sending || uploading || (!input.trim() && !pending.length)}
+                disabled={!chat || sending || uploading || !canSubmit}
               >
-                Отправить
+                {editMode ? 'Изменить' : isImageModel ? 'Нарисовать' : 'Отправить'}
               </button>
             </div>
           </div>
