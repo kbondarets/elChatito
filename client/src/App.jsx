@@ -16,6 +16,58 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
 }
 
+// Морда кота — символ elChatito. Силуэт белый (цвет = цвет текста), а глаза,
+// нос и рот «вырезаны» цветом панели — поэтому морда читается на тёмном фоне.
+function ChatitoLogo({ size = 26 }) {
+  return (
+    <svg
+      className="logo-cat"
+      width={size}
+      height={size}
+      viewBox="0 0 64 64"
+      role="img"
+      aria-label="el chatito"
+    >
+      {/* уши */}
+      <path d="M13 32 L11 7 L32 19 Z" fill="currentColor" />
+      <path d="M51 32 L53 7 L32 19 Z" fill="currentColor" />
+      {/* голова */}
+      <circle cx="32" cy="38" r="21" fill="currentColor" />
+      {/* глаза */}
+      <circle cx="24" cy="36" r="3.4" fill="var(--panel)" />
+      <circle cx="40" cy="36" r="3.4" fill="var(--panel)" />
+      {/* нос и рот */}
+      <path d="M28.5 43 H35.5 L32 47.5 Z" fill="var(--panel)" />
+      <path
+        d="M32 47.5 V50 M32 50 q-4.5 4.5 -9 1 M32 50 q4.5 4.5 9 1"
+        stroke="var(--panel)"
+        strokeWidth="2"
+        strokeLinecap="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+// Обычная контурная скрепка — в отличие от эмодзи 📎 её хорошо видно.
+function PaperclipIcon({ size = 24 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
 // Вложение в пузыре сообщения: картинку показываем превью, остальное — плашкой.
 function AttachmentView({ a }) {
   const url = `/api/uploads/${a.id}`;
@@ -61,6 +113,8 @@ export default function App() {
   // Файлы, готовые к отправке (уже загружены на сервер — храним метаданные).
   const [pending, setPending] = useState([]);
   const [uploading, setUploading] = useState(false);
+  // Подсвечиваем область чата, когда файл тащат в окно.
+  const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef(null);
 
   // При старте: список моделей и список чатов.
@@ -97,6 +151,17 @@ export default function App() {
     setPending([]);
   }, [currentId]);
 
+  // Гасим «браузерное» поведение: без этого файл, брошенный мимо зоны, открылся бы в окне.
+  useEffect(() => {
+    const block = (e) => e.preventDefault();
+    window.addEventListener('dragover', block);
+    window.addEventListener('drop', block);
+    return () => {
+      window.removeEventListener('dragover', block);
+      window.removeEventListener('drop', block);
+    };
+  }, []);
+
   // Прокрутка вниз при новом сообщении или во время ожидания ответа.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -115,11 +180,16 @@ export default function App() {
     setChats(chats || []);
   }
 
-  // Загружаем выбранные файлы по одному (чтобы показать ошибку по конкретному файлу).
-  async function pickFiles(event) {
-    const files = Array.from(event.target.files || []);
-    event.target.value = ''; // иначе нельзя выбрать тот же файл повторно
+  // Загружаем файлы по одному (чтобы показать ошибку по конкретному файлу).
+  // Один путь и для кнопки-скрепки, и для перетаскивания, и для вставки из буфера.
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
     if (!files.length) return;
+    if (!currentId) {
+      setError('Сначала создайте чат.');
+      return;
+    }
+    if (sending || uploading) return;
     setError('');
     setUploading(true);
     try {
@@ -134,6 +204,43 @@ export default function App() {
     } finally {
       setUploading(false);
     }
+  }
+
+  function pickFiles(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = ''; // иначе нельзя выбрать тот же файл повторно
+    uploadFiles(files);
+  }
+
+  // Ctrl+V: если в буфере картинка/файл — прикрепляем его, иначе вставляется текст.
+  function pasteFiles(event) {
+    const files = Array.from(event.clipboardData?.items || [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (files.length) {
+      event.preventDefault();
+      uploadFiles(files);
+    }
+  }
+
+  // Перетаскивание: подсвечиваем зону, а на drop забираем файлы.
+  function dragOver(event) {
+    if (!event.dataTransfer?.types?.includes('Files')) return;
+    event.preventDefault(); // без этого браузер откроет файл вместо загрузки
+    setDragging(true);
+  }
+
+  function dragLeave(event) {
+    // Уходим только когда курсор покинул саму зону, а не её дочерние элементы.
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    setDragging(false);
+  }
+
+  function dropFiles(event) {
+    event.preventDefault();
+    setDragging(false);
+    uploadFiles(event.dataTransfer?.files);
   }
 
   function removePending(id) {
@@ -285,6 +392,11 @@ export default function App() {
   return (
     <div className="layout">
       <aside className="sidebar">
+        <div className="brand" title="el chatito">
+          <ChatitoLogo size={30} />
+          <span className="brand-name">el chatito</span>
+        </div>
+
         <button className="new-chat" onClick={newChat}>
           + Новый чат
         </button>
@@ -403,17 +515,14 @@ export default function App() {
 
         {error && <div className="error">{error}</div>}
 
-        <form className="composer" onSubmit={send}>
+        <form
+          className={`composer ${dragging ? 'dragging' : ''}`}
+          onSubmit={send}
+          onDragOver={dragOver}
+          onDragLeave={dragLeave}
+          onDrop={dropFiles}
+        >
           <input ref={fileInputRef} type="file" multiple hidden onChange={pickFiles} />
-          <button
-            type="button"
-            className="attach-btn"
-            title="Прикрепить файл или фото"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={!chat || sending || uploading}
-          >
-            {uploading ? '…' : '📎'}
-          </button>
 
           <div className="composer-body">
             {!!pending.length && (
@@ -446,24 +555,44 @@ export default function App() {
               </div>
             )}
 
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) send(e);
-              }}
-              placeholder={chat ? 'Введите сообщение и нажмите Enter…' : 'Сначала создайте чат'}
-              disabled={!chat || sending}
-              rows={1}
-            />
+            <div className="composer-row">
+              <button
+                type="button"
+                className="attach-btn"
+                title="Прикрепить файл или фото"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={!chat || sending || uploading}
+              >
+                {uploading ? '…' : <PaperclipIcon size={24} />}
+              </button>
+
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onPaste={pasteFiles}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) send(e);
+                }}
+                placeholder={chat ? 'Введите сообщение и нажмите Enter…' : 'Сначала создайте чат'}
+                disabled={!chat || sending}
+                rows={1}
+              />
+
+              <button
+                type="submit"
+                className="send-btn"
+                disabled={!chat || sending || uploading || (!input.trim() && !pending.length)}
+              >
+                Отправить
+              </button>
+            </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={!chat || sending || uploading || (!input.trim() && !pending.length)}
-          >
-            Отправить
-          </button>
+          {dragging && (
+            <div className="drop-overlay">
+              <span>Отпустите файлы, чтобы прикрепить</span>
+            </div>
+          )}
         </form>
       </main>
     </div>

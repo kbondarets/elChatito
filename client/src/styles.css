@@ -43,6 +43,26 @@ body {
   gap: 12px;
 }
 
+/* Эмблема «el chatito» в левом верхнем углу. */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 4px 4px;
+}
+
+.logo-cat {
+  flex-shrink: 0;
+  color: #fff; /* белая морда кота */
+}
+
+.brand-name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--text);
+}
+
 .new-chat {
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -265,33 +285,43 @@ body {
 
 /* ----- Поле ввода ----- */
 .composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  position: relative;
   padding: 14px 20px 20px;
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
 
 .composer-body {
-  flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
+/* Скрепка, поле ввода и «Отправить» — в один ряд, одной высоты. */
+.composer-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+
 /* Кнопка-скрепка для прикрепления файлов. */
 .attach-btn {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel-2);
-  color: var(--text);
+  color: #fff; /* белая скрепка */
   font-size: 18px;
   cursor: pointer;
+}
+
+.attach-btn svg {
+  display: block;
 }
 
 .attach-btn:hover:not(:disabled) {
@@ -304,10 +334,11 @@ body {
 }
 
 .composer textarea {
+  flex: 1;
+  min-width: 0;
   resize: none;
   min-height: 44px;
   max-height: 200px;
-  width: 100%;
   padding: 12px 14px;
   border-radius: 10px;
   border: 1px solid var(--border);
@@ -322,20 +353,49 @@ body {
   border-color: var(--accent);
 }
 
-.composer button {
-  padding: 0 20px;
+/* Кнопка «Отправить» — растягивается по высоте поля ввода. */
+.send-btn {
+  flex-shrink: 0;
+  padding: 0 22px;
   border: none;
   border-radius: 10px;
   background: var(--accent);
   color: #fff;
   font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.composer button:disabled {
+.send-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.send-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Пока в зону тащат файлы — обводим поле ввода и показываем подсказку. */
+.composer.dragging .composer-row {
+  outline: 2px dashed var(--accent);
+  outline-offset: 3px;
+  border-radius: 12px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(15, 17, 23, 0.82);
+  border: 2px dashed var(--accent);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
 }
 
 /* ----- Вложения ----- */
