@@ -63,13 +63,27 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  // При старте: список моделей и список чатов.
+  // При старте: список моделей и список чатов, а затем сразу открываем чат —
+  // верхний в списке (последний по времени) или новый, если чатов ещё нет.
+  // Так после запуска можно печатать сразу, не нажимая «+ Новый чат».
+  // bootstrappedRef защищает от повторного запуска: в StrictMode React в режиме
+  // разработки прогоняет эффекты дважды, и без защиты создалось бы два чата.
+  const bootstrappedRef = useRef(false);
   useEffect(() => {
+    if (bootstrappedRef.current) return;
+    bootstrappedRef.current = true;
     (async () => {
       try {
         const [m, c] = await Promise.all([api('/models'), api('/chats')]);
-        setModels(m.models || []);
-        setChats(c.chats || []);
+        const modelList = m.models || [];
+        const chatList = c.chats || [];
+        setModels(modelList);
+        setChats(chatList);
+        if (chatList.length) {
+          setCurrentId(chatList[0].id);
+        } else {
+          await createChat(modelList);
+        }
       } catch (e) {
         setError(e.message);
       }
@@ -115,6 +129,20 @@ export default function App() {
     setChats(chats || []);
   }
 
+  // Создать чат и сразу его открыть. Список моделей принимаем аргументом:
+  // при старте приложения состояние models ещё не успевает обновиться.
+  async function createChat(modelList, preferredModel) {
+    const model =
+      preferredModel || modelList?.find((m) => m.type === 'chat')?.id || modelList?.[0]?.id;
+    const { chat: created } = await api('/chats', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    });
+    await refreshChats();
+    setCurrentId(created.id);
+    return created;
+  }
+
   // Загружаем выбранные файлы по одному (чтобы показать ошибку по конкретному файлу).
   async function pickFiles(event) {
     const files = Array.from(event.target.files || []);
@@ -143,15 +171,9 @@ export default function App() {
   async function newChat() {
     if (sending) return; // не переключаемся, пока модель печатает
     setError('');
-    // Берём модель текущего чата, а если чата нет — первую чат-модель.
-    const model = chat?.model || models.find((m) => m.type === 'chat')?.id || models[0]?.id;
     try {
-      const { chat: created } = await api('/chats', {
-        method: 'POST',
-        body: JSON.stringify({ model }),
-      });
-      await refreshChats();
-      setCurrentId(created.id);
+      // Модель берём из текущего чата, а если чата нет — первую чат-модель.
+      await createChat(models, chat?.model);
     } catch (e) {
       setError(e.message);
     }
@@ -265,10 +287,13 @@ export default function App() {
     try {
       await api(`/chats/${id}`, { method: 'DELETE' });
       await refreshChats();
-      // Если удалили открытый чат — вернёмся к пустому экрану.
+      // Удалили открытый чат — открываем следующий, а если чатов не осталось,
+      // создаём новый: экран без открытого чата выглядит как поломка.
       if (currentId === id) {
-        setCurrentId(null);
-        setChat(null);
+        const rest = chats.filter((c) => c.id !== id);
+        setChat(null); // не показываем сообщения удалённого чата
+        if (rest.length) setCurrentId(rest[0].id);
+        else await createChat(models);
       }
     } catch (e) {
       setError(e.message);
@@ -368,7 +393,7 @@ export default function App() {
         </header>
 
         <section className="messages" ref={messagesRef}>
-          {!chat && <p className="placeholder">Создайте новый чат, чтобы начать общение.</p>}
+          {!chat && <p className="placeholder">Открываем чат…</p>}
           {chat?.messages?.length === 0 && <p className="placeholder">Напишите первое сообщение.</p>}
           {chat?.messages?.map((m, i) => (
             <div key={i} className={`bubble ${m.role}`}>
@@ -452,7 +477,7 @@ export default function App() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) send(e);
               }}
-              placeholder={chat ? 'Введите сообщение и нажмите Enter…' : 'Сначала создайте чат'}
+              placeholder="Введите сообщение и нажмите Enter…"
               disabled={!chat || sending}
               rows={1}
             />
