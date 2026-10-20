@@ -26,7 +26,7 @@ const ok = (name, cond, extra = '') => {
 };
 
 // 1. Подписи моделей и «для чего подходит» — собираются из типа и capabilities.
-const { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_ORDER } = await import(
+const { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_ORDER, contextFill } = await import(
   '../client/src/modelInfo.js'
 );
 
@@ -70,6 +70,15 @@ const secondPrice = priceInfo({ pricing: { unit: 'second', input: null, cachedIn
 ok('видео — цена за секунду', secondPrice?.kind === 'second' && secondPrice.amount === 0.12);
 ok('без прайса тариф не выдумывается', priceInfo({ pricing: null }) === null && priceInfo({}) === null);
 ok('пустой прайс не считается тарифом', priceInfo({ pricing: { unit: '1m_tokens', input: null, output: null, generation: null } }) === null);
+
+console.log('Заполнение окна контекста:');
+const meter = contextFill({ promptTokens: 1000, completionTokens: 500, totalTokens: 1500 }, 100000);
+ok('процент считается от окна', meter?.percent === 2 && meter.used === 1500 && meter.limit === 100000, `(${JSON.stringify(meter)})`);
+ok('доля ограничена единицей сверху', contextFill({ promptTokens: 999, completionTokens: 99, totalTokens: 200000 }, 100000).ratio === 1);
+ok('без totalTokens берётся promptTokens', contextFill({ promptTokens: 50000 }, 100000).percent === 50);
+ok('окно неизвестно — ничего не рисуем', contextFill({ totalTokens: 100 }, null) === null);
+ok('ответа ещё не было — ничего не рисуем', contextFill(null, 100000) === null);
+ok('нулевое окно не делит на ноль', contextFill({ totalTokens: 100 }, 0) === null);
 
 // 2. Каталог сервера: у моделей есть pricing, который нужен панели.
 let models = [];
@@ -118,7 +127,7 @@ fs.mkdirSync(path.dirname(outFile), { recursive: true });
 try {
   await esbuild.build({
     stdin: {
-      contents: `${source}\nexport { ModelInfoPanel, PriceCell };\n`,
+      contents: `${source}\nexport { ModelInfoPanel, PriceCell, ContextMeter };\n`,
       // resolveDir нужен, чтобы относительные импорты внутри App.jsx нашли свои файлы.
       resolveDir: path.dirname(APP),
       sourcefile: 'App.probe.jsx',
@@ -133,7 +142,7 @@ try {
     logLevel: 'silent',
   });
 
-  const { ModelInfoPanel, PriceCell } = await import(pathToFileURL(outFile).href);
+  const { ModelInfoPanel, PriceCell, ContextMeter } = await import(pathToFileURL(outFile).href);
 
   console.log(`Отрисовка панели (${models.length} моделей${live ? ', живой каталог' : ', фикстура'}):`);
   const html = renderToStaticMarkup(
@@ -169,6 +178,24 @@ try {
     'у видео подпись «за секунду видео»',
     renderToStaticMarkup(React.createElement(PriceCell, { price: { kind: 'second', amount: 0.28 } })).includes('за секунду видео'),
   );
+
+  console.log('Полоса заполнения контекста:');
+  const meterHtml = renderToStaticMarkup(
+    React.createElement(ContextMeter, {
+      usage: { promptTokens: 30000, completionTokens: 1000, totalTokens: 31000 },
+      contextWindow: 100000,
+    }),
+  );
+  ok('полоса отрисовалась', meterHtml.includes('ctx-meter') && meterHtml.includes('ctx-fill'), `(${meterHtml.length})`);
+  ok('показан процент заполнения', meterHtml.includes('31%'), `(${meterHtml})`);
+  ok('заливка задана через width', /width:\s*31%/.test(meterHtml), `(${meterHtml})`);
+  ok('в подсказке видно «из … токенов»', meterHtml.includes('токенов'));
+  const emptyMeter = renderToStaticMarkup(React.createElement(ContextMeter, { usage: null, contextWindow: 100000 }));
+  ok('без ответа — прочерк, а не ноль', emptyMeter.includes('ctx-text">—<'), `(${emptyMeter})`);
+  const highMeter = renderToStaticMarkup(
+    React.createElement(ContextMeter, { usage: { totalTokens: 96000 }, contextWindow: 100000 }),
+  );
+  ok('у предела окна полоса краснеет', highMeter.includes('high'));
 
   // Панель на пустом каталоге не должна падать.
   const empty = renderToStaticMarkup(

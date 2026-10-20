@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, apiStream, uploadFile, generateImage, editImage } from './api.js';
-import { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_LABEL, TYPE_ORDER } from './modelInfo.js';
+import { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_LABEL, TYPE_ORDER, contextFill } from './modelInfo.js';
 
 // Размеры кадра для правки картинки (для генерации размер выбирает модель сама).
 const EDIT_SIZES = [
@@ -135,10 +135,32 @@ function PriceCell({ price }) {
   );
 }
 
+// Заполнение окна контекста в шапке чата: тонкая полоса с процентом.
+// Число берётся из usage последнего ответа (уже пришло — токены не тратятся).
+// Пока ответа не было или окно модели неизвестно — показываем серую «заглушку».
+function ContextMeter({ usage, contextWindow }) {
+  const fill = contextFill(usage, contextWindow);
+  const percent = fill ? fill.percent : 0;
+  // Свыше 80% подсвечиваем оранжевым, свыше 95% — красным: скоро обрезание.
+  const level = percent >= 95 ? 'high' : percent >= 80 ? 'warn' : 'ok';
+  const title = fill
+    ? `Занято ${formatTokens(fill.used)} из ${formatTokens(fill.limit)} токенов (${percent}%)`
+    : 'Заполнение окна контекста появится после первого ответа модели';
+
+  return (
+    <div className={`ctx-meter ${level}`} title={title} aria-label={title}>
+      <div className="ctx-bar">
+        <div className="ctx-fill" style={{ width: `${Math.min(percent, 100)}%` }} />
+      </div>
+      <span className="ctx-text">{fill ? `${percent}%` : '—'}</span>
+    </div>
+  );
+}
+
 // Правая панель «Модели и цены»: открывается кнопкой «i» в шапке.
 // Таблица разбита по типам моделей; строка текущей модели подсвечена, а клик
 // по строке сразу выбирает эту модель для открытого чата.
-function ModelInfoPanel({ models, currentModelId, onPick, onClose }) {
+function ModelInfoPanel({ models, currentModelId, onPick, onClose, locked }) {
   const [query, setQuery] = useState('');
 
   // Закрытие по Esc — привычно для панелей, открывающихся поверх экрана.
@@ -180,7 +202,9 @@ function ModelInfoPanel({ models, currentModelId, onPick, onClose }) {
 
       <p className="infopanel-note">
         Цены apimira — в долларах за 1M токенов (у картинок и видео — за кадр или секунду).
-        Нажмите строку, чтобы выбрать модель для открытого чата.
+        {locked
+          ? ' Модель этого чата закреплена после первого ответа — выбор доступен только в новом чате.'
+          : ' Нажмите строку, чтобы выбрать модель для открытого чата.'}
       </p>
 
       <input
@@ -210,9 +234,13 @@ function ModelInfoPanel({ models, currentModelId, onPick, onClose }) {
               {g.list.map((m) => (
                 <tr
                   key={m.id}
-                  className={m.id === currentModelId ? 'current' : ''}
+                  className={`${m.id === currentModelId ? 'current' : ''}${locked && m.id !== currentModelId ? ' locked' : ''}`}
                   onClick={() => onPick(m.id)}
-                  title={`Выбрать модель ${m.name}`}
+                  title={
+                    locked && m.id !== currentModelId
+                      ? 'Модель закреплена после первого ответа — доступно только в новом чате'
+                      : `Выбрать модель ${m.name}`
+                  }
                 >
                   <td className="mt-name">
                     <span className="mt-title">
@@ -600,8 +628,13 @@ export default function App() {
   }
 
   // Выбор модели — и из выпадающего списка, и кликом по строке в панели «Модели и цены».
+  // После первого ответа модели выбор заблокирован (сервер тоже это проверяет).
   async function selectModel(model) {
     if (!model || model === chat?.model) return;
+    if (chat?.messages?.some((m) => m.role === 'assistant')) {
+      setError('Модель закреплена после первого ответа. Создайте новый чат, чтобы выбрать другую.');
+      return;
+    }
     // Смена модели сбрасывает режим картинок (нарисовать/изменить) и вложения.
     setImageMode('generate');
     setPending([]);
@@ -654,6 +687,11 @@ export default function App() {
 
   // Текущая модель и предупреждение, если к «слепой» модели прикрепляют картинку.
   const currentModel = models.find((m) => m.id === chat?.model);
+  // Модель «защёлкивается» после первого ответа: тогда смена доступна только новым чатом.
+  const locked = !!chat?.messages?.some((m) => m.role === 'assistant');
+  // Полоса заполнения окна контекста: текущее usage против размера окна модели.
+  const usage = chat?.usage || null;
+  const contextWindow = currentModel?.contextWindow ?? null;
   const visionWarn =
     pending.some((a) => a.kind === 'image') &&
     currentModel?.type !== 'image' &&
@@ -753,7 +791,12 @@ export default function App() {
       <main className="main">
         <header className="topbar">
           <span className="topbar-label">Модель:</span>
-          <select value={chat?.model || ''} onChange={(e) => selectModel(e.target.value)} disabled={!chat}>
+          <select
+            value={chat?.model || ''}
+            onChange={(e) => selectModel(e.target.value)}
+            disabled={!chat || locked}
+            title={locked ? 'Модель закреплена после первого ответа. Создайте новый чат, чтобы выбрать другую.' : 'Выбрать модель'}
+          >
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {modelLabel(m)}
@@ -770,6 +813,8 @@ export default function App() {
           >
             i
           </button>
+          {/* Заполнение окна контекста — из usage последнего ответа, без лишних запросов. */}
+          <ContextMeter usage={usage} contextWindow={contextWindow} />
         </header>
 
         <section className="messages" ref={messagesRef}>
@@ -966,6 +1011,7 @@ export default function App() {
         <ModelInfoPanel
           models={models}
           currentModelId={chat?.model}
+          locked={locked}
           onPick={(id) => selectModel(id)}
           onClose={() => setShowModels(false)}
         />
