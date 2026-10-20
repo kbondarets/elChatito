@@ -50,6 +50,18 @@ export function formatTokens(n) {
   return typeof n === 'number' ? new Intl.NumberFormat('ru-RU').format(n) : '';
 }
 
+// Заполнение окна контекста по данным последнего ответа модели (usage).
+// Используем totalTokens (запрос + ответ) — столько займёт переписка к
+// следующему ходу. Считается из уже пришедшего usage, лишних запросов нет.
+// null — если окно неизвестно или ответа ещё не было.
+export function contextFill(usage, contextWindow) {
+  const used = usage?.totalTokens ?? usage?.promptTokens;
+  if (typeof used !== 'number' || !Number.isFinite(used)) return null;
+  if (typeof contextWindow !== 'number' || contextWindow <= 0) return null;
+  const percent = Math.round((used / contextWindow) * 100);
+  return { used, limit: contextWindow, percent, ratio: Math.min(used / contextWindow, 1) };
+}
+
 // Тариф модели в удобном для таблицы виде.
 //   { kind: 'tokens', input, cachedInput, output } — за 1M токенов;
 //   { kind: 'frame' | 'second', amount }          — за кадр картинки / секунду видео.

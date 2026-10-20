@@ -65,6 +65,24 @@ export function updateChat(id, patch) {
   return chat;
 }
 
+// Сколько токенов заняло последнее обращение к модели (usage из её ответа).
+// Из этого числа интерфейс рисует заполнение окна контекста — без лишних запросов.
+export function setChatCapacity(id, usage) {
+  const db = read();
+  const chat = db.chats.find((c) => c.id === id);
+  if (!chat) return null;
+  const prompt = Number(usage?.prompt_tokens);
+  if (!Number.isFinite(prompt)) return chat;
+  chat.usage = {
+    promptTokens: prompt,
+    completionTokens: Number(usage?.completion_tokens) || 0,
+    totalTokens: Number(usage?.total_tokens) || prompt,
+    at: new Date().toISOString(),
+  };
+  write(db);
+  return chat;
+}
+
 export function addMessage(id, message) {
   const db = read();
   const chat = db.chats.find((c) => c.id === id);

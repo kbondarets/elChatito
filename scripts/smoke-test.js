@@ -13,6 +13,15 @@ const patch = (p, body) =>
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }).then((r) => r.json());
+// PATCH с кодом ответа — нужен для проверки «защёлкивания» модели (409).
+const patchStatus = async (p, body) => {
+  const r = await fetch(BASE + p, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: r.status, data: await r.json() };
+};
 const del = (p) => fetch(BASE + p, { method: 'DELETE' }).then((r) => r.json());
 const get = (p) => fetch(BASE + p).then((r) => r.json());
 
@@ -76,6 +85,33 @@ console.log('Ответ сохранён в чат:', streamedChat.chat.messages
 const NEW_TITLE = 'Переименованный чат';
 const renamed = await patch(`/chats/${chat.id}`, { title: NEW_TITLE });
 console.log('Переименование:', renamed.chat.title === NEW_TITLE ? 'OK' : `ОШИБКА (${renamed.chat.title})`);
+
+// --- Заполнение окна контекста: usage сохранился после ответа ---
+const usageChat = await get(`/chats/${chat.id}`);
+const usage = usageChat.chat.usage;
+console.log('usage ответа сохранён:', usage?.promptTokens > 0 ? 'OK' : `ОШИБКА (${JSON.stringify(usage)})`);
+
+// --- «Защёлкивание» модели после первого ответа ---
+// В этом чате уже есть ответы модели — смена модели должна отклоняться (409).
+const other = models.find((m) => m.id !== chat.model)?.id;
+const blocked = await patchStatus(`/chats/${chat.id}`, { model: other });
+console.log(
+  'Смена модели после ответа заблокирована:',
+  blocked.status === 409 && blocked.data.error === 'model_locked' ? 'OK (409)' : `ОШИБКА (${blocked.status} ${JSON.stringify(blocked.data)})`,
+);
+// Переименование при этом по-прежнему разрешено.
+const renameStillOk = await patchStatus(`/chats/${chat.id}`, { title: 'Ещё раз' });
+console.log('Переименование при закреплённой модели разрешено:', renameStillOk.status === 200 ? 'OK' : `ОШИБКА (${renameStillOk.status})`);
+
+// В свежем чате (без ответов модели) модель менять можно.
+const { chat: freshChat } = await post('/chats', {});
+const freshOther = models.find((m) => m.id !== freshChat.model)?.id;
+const allowed = await patchStatus(`/chats/${freshChat.id}`, { model: freshOther });
+console.log(
+  'Смена модели в новом чате разрешена:',
+  allowed.status === 200 && allowed.data.chat.model === freshOther ? 'OK' : `ОШИБКА (${allowed.status} ${JSON.stringify(allowed.data)})`,
+);
+await del(`/chats/${freshChat.id}`);
 
 // --- Удаление ---
 await del(`/chats/${chat.id}`);

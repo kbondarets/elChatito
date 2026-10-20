@@ -86,18 +86,23 @@ export async function chatComplete({ model, messages }) {
   const data = safeJson(text);
   if (!res.ok) throw new Error(errorMessage(res, data, text));
   const content = data?.choices?.[0]?.message?.content;
-  return typeof content === 'string' ? content : '';
+  // usage (если шлюз его отдал) — из него считаем заполнение окна контекста
+  // в шапке чата. Дополнительных запросов не делаем: число уже пришло с ответом.
+  return { content: typeof content === 'string' ? content : '', usage: data?.usage ?? null };
 }
 
 // Потоковый ответ модели: тот же POST /v1/chat/completions, но со stream: true.
 // apimira присылает SSE-строки "data: {...}", заканчивая маркером "data: [DONE]".
-// Отдаём кусочки текста по мере поступления — интерфейс рисует их «по буквам».
+// Отдаём события двух видов: { delta: '…' } — кусок текста (интерфейс рисует его
+// «по буквам») и { usage } — итоговые токены из последнего чанка. stream_options
+// с include_usage просим у шлюза, чтобы число токенов пришло в том же ответе:
+// так заполнение окна контекста не стоит ни одного лишнего запроса.
 export async function* chatCompleteStream({ model, messages, signal }) {
   assertKey();
   const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ model, messages, stream: true }),
+    body: JSON.stringify({ model, messages, stream: true, stream_options: { include_usage: true } }),
     signal,
   });
 
@@ -124,8 +129,11 @@ export async function* chatCompleteStream({ model, messages, signal }) {
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') return;
-        const chunk = safeJson(payload)?.choices?.[0]?.delta?.content;
-        if (typeof chunk === 'string' && chunk) yield chunk;
+        const data = safeJson(payload);
+        // Последний чанк приходит без choices, зато с usage — забираем токены.
+        if (data?.usage) yield { usage: data.usage };
+        const chunk = data?.choices?.[0]?.delta?.content;
+        if (typeof chunk === 'string' && chunk) yield { delta: chunk };
       }
     }
   } finally {

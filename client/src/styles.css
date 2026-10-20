@@ -226,6 +226,70 @@ body {
   color: #fff;
 }
 
+/* Выбор модели недоступен: модель закреплена после первого ответа.
+   Делаем поле бледным, чтобы сразу было видно, что менять нельзя. */
+.topbar select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: var(--muted);
+}
+
+/* Полоска заполнения окна контекста в шапке чата. */
+.ctx-meter {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 200px;
+  flex-shrink: 0;
+}
+
+.ctx-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.ctx-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.ctx-meter.warn .ctx-fill {
+  background: #d9a12c;
+}
+
+.ctx-meter.high .ctx-fill {
+  background: #d9534f;
+}
+
+.ctx-text {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  min-width: 38px;
+  text-align: right;
+}
+
+.ctx-meter.high .ctx-text {
+  color: #ff9a96;
+}
+
+/* Строка модели в панели недоступна: модель чата закреплена. */
+.model-table tbody tr.locked {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-table tbody tr.locked:hover {
+  background: transparent;
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;

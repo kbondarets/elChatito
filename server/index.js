@@ -214,10 +214,25 @@ app.get('/api/chats/:id', (req, res) => {
   res.json({ chat });
 });
 
-// Сменить модель у существующего чата.
+// Сменить модель у существующего чата. После первого ответа модели модель
+// «защёлкивается»: сменить её можно только новым чатом (иначе ответы на уже
+// сказанное были бы от другой модели — это сбивает с толку и ломает контекст).
+// Заголовок при этом переименовать по-прежнему можно.
 app.patch('/api/chats/:id', (req, res) => {
-  const chat = store.updateChat(req.params.id, { model: req.body?.model, title: req.body?.title });
-  if (!chat) return res.status(404).json({ error: 'chat_not_found', message: 'Чат не найден.' });
+  const existing = store.getChat(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'chat_not_found', message: 'Чат не найден.' });
+
+  const wantedModel = req.body?.model;
+  const changingModel = typeof wantedModel === 'string' && wantedModel && wantedModel !== existing.model;
+  const locked = (existing.messages || []).some((m) => m.role === 'assistant');
+  if (changingModel && locked) {
+    return res.status(409).json({
+      error: 'model_locked',
+      message: 'Модель закреплена после первого ответа. Создайте новый чат, чтобы выбрать другую.',
+    });
+  }
+
+  const chat = store.updateChat(req.params.id, { model: wantedModel, title: req.body?.title });
   res.json({ chat });
 });
 
@@ -242,11 +257,13 @@ app.post('/api/chats/:id/messages', async (req, res) => {
   store.addMessage(chat.id, { role: 'user', content, attachments });
 
   try {
-    const reply = await chatComplete({
+    const { content: reply, usage } = await chatComplete({
       model: chat.model,
       messages: toUpstreamMessages(store.getChat(chat.id).messages),
     });
     store.addMessage(chat.id, { role: 'assistant', content: reply });
+    // Запоминаем заполнение окна контекста (из usage этого же ответа).
+    if (usage) store.setChatCapacity(chat.id, usage);
     res.json({ chat: store.getChat(chat.id) });
   } catch (err) {
     // Сообщение пользователя сохраняем, но ответа нет — вернём ошибку и актуальный чат.
@@ -287,13 +304,18 @@ app.post('/api/chats/:id/messages/stream', async (req, res) => {
 
   try {
     let full = '';
-    for await (const chunk of chatCompleteStream({
+    for await (const event of chatCompleteStream({
       model: chat.model,
       messages: toUpstreamMessages(store.getChat(chat.id).messages),
       signal: controller.signal,
     })) {
-      full += chunk;
-      send({ type: 'delta', text: chunk });
+      if (event.delta) {
+        full += event.delta;
+        send({ type: 'delta', text: event.delta });
+      } else if (event.usage) {
+        // Итоговые токены приходят последним чанком — сохраняем заполнение окна.
+        store.setChatCapacity(chat.id, event.usage);
+      }
     }
     store.addMessage(chat.id, { role: 'assistant', content: full });
     send({ type: 'done', chat: store.getChat(chat.id) });
