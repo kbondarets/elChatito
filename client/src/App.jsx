@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, apiStream, uploadFile, generateImage, editImage } from './api.js';
+import { Markdown } from './Markdown.jsx';
 import { modelLabel, purposeLabel, priceInfo, formatUsd, formatTokens, capMarks, TYPE_LABEL, TYPE_ORDER, contextFill } from './modelInfo.js';
 
 // Размеры кадра для правки картинки (для генерации размер выбирает модель сама).
@@ -830,22 +831,26 @@ export default function App() {
                   ))}
                 </div>
               )}
-              {m.content && <div className="text">{m.content}</div>}
+              {/* Ответ модели показываем как Markdown: без сырых «звёздочек».
+                  Своё сообщение оставляем как есть — ровно так, как его набрали. */}
+              {m.content &&
+                (m.role === 'assistant' ? (
+                  <Markdown text={m.content} />
+                ) : (
+                  <div className="text">{m.content}</div>
+                ))}
             </div>
           ))}
           {sending && (
             <div className="bubble assistant streaming">
               <div className="role">Модель</div>
-              <div className="text">
-                {streamText ? (
-                  <>
-                    {streamText}
-                    <span className="cursor" />
-                  </>
-                ) : (
+              {streamText ? (
+                <Markdown text={streamText} cursor />
+              ) : (
+                <div className="text">
                   <span className="thinking">Модель думает…</span>
-                )}
-              </div>
+                </div>
+              )}
             </div>
           )}
           <div ref={bottomRef} />
